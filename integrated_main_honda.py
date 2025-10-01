@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-統合スクリプト：
-1. Yahoo!ニュース検索結果から記事リストを取得。
+統合スクリプト（ホンダ版）：
+1. Yahoo!ニュース検索結果から「ホンダ」の記事リストを取得。
 2. そのリストを単一スプレッドシートの「Yahoo」シートに追記。
 3. 追記された記事リストから、前日15:00〜当日14:59:59の分を抽出し、
    記事本文とコメントを取得。
 4. 取得した詳細データを同じスプレッドシートの当日日付タブに書き込み。
-
-認証: GitHub Secretsの GOOGLE_CREDENTIALS または GCP_SERVICE_ACCOUNT_KEY を使用。
 """
 
 import os
@@ -29,11 +27,11 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
 # ====== 設定 ======
-# 指定された単一のスプレッドシートID
-SHARED_SPREADSHEET_ID = "1vy0quUujxw5hagwATB5W87wD4tVTd5d8qxgt8IekRTY" 
+# 指定された単一のスプレッドシートID (ホンダ版)
+SHARED_SPREADSHEET_ID = "1QO4oSbJrtIVXNQJEy0jRxzOtz9CtSniqU1ys_4mhQCo" 
 
 # 【ステップ1, 2】ニュースリスト取得用の設定
-KEYWORD = "日産"
+KEYWORD = "ホンダ"
 SOURCE_SPREADSHEET_ID = SHARED_SPREADSHEET_ID
 SOURCE_SHEET_NAME = "Yahoo"
 
@@ -93,11 +91,9 @@ def parse_post_date(raw, today_jst: datetime) -> Optional[datetime]:
 def build_gspread_client() -> gspread.Client:
     """
     gspreadクライアントを構築します。
-    環境変数 GOOGLE_CREDENTIALS または GCP_SERVICE_ACCOUNT_KEY のいずれか、
-    またはローカルの credentials.json を使用します。
+    環境変数 GOOGLE_CREDENTIALS または GCP_SERVICE_ACCOUNT_KEY のいずれかを使用します。
     """
     try:
-        # main2.pyの認証方式 (GOOGLE_CREDENTIALS) を優先
         creds_str = os.environ.get("GOOGLE_CREDENTIALS")
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         
@@ -106,11 +102,11 @@ def build_gspread_client() -> gspread.Client:
             credentials = ServiceAccountCredentials.from_json_keyfile_dict(info, scope)
             return gspread.authorize(credentials)
         else:
-            # main1.pyの認証方式 (GCP_SERVICE_ACCOUNT_KEY または ローカルファイル)
             creds_str_alt = os.environ.get("GCP_SERVICE_ACCOUNT_KEY")
             if creds_str_alt:
                 credentials = json.loads(creds_str_alt)
             else:
+                # ローカル実行時は 'credentials.json' が必要
                 credentials = json.load(open('credentials.json'))
                 
             return gspread.service_account_from_dict(credentials)
@@ -120,7 +116,7 @@ def build_gspread_client() -> gspread.Client:
 
 
 # =========================================================================
-# 【ステップ1】 Yahoo!ニュースリスト取得 (main1.pyのロジック)
+# 【ステップ1】 Yahoo!ニュースリスト取得
 # =========================================================================
 
 def get_yahoo_news_with_selenium(keyword: str) -> list[dict]:
@@ -135,7 +131,9 @@ def get_yahoo_news_with_selenium(keyword: str) -> list[dict]:
     options.add_argument("--window-size=1280,1024")
 
     try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        driver_path = ChromeDriverManager().install()
+        service = Service(driver_path)
+        driver = webdriver.Chrome(service=service, options=options)
     except Exception as e:
         print(f"❌ WebDriverの初期化に失敗しました: {e}")
         return []
@@ -236,10 +234,10 @@ def write_news_list_to_source(gc: gspread.Client, articles: list[dict]):
 
 
 # =========================================================================
-# 【ステップ3, 4】 本文・コメント取得 (main2.pyのロジック)
+# 【ステップ3, 4】 本文・コメント取得
 # =========================================================================
 
-# --- DESTシート操作 (main2.py) ---
+# --- DESTシート操作 ---
 def ensure_today_sheet(sh: gspread.Spreadsheet, today_tab: str) -> gspread.Worksheet:
     """当日タブが存在しない場合は作成します"""
     try:
@@ -254,14 +252,15 @@ def get_existing_urls(ws: gspread.Worksheet) -> Set[str]:
     return set(vals[1:] if len(vals) > 1 else [])
 
 def ensure_ae_header(ws: gspread.Worksheet) -> None:
-    """A〜E列のヘッダーを保証"""
+    """A〜E列のヘッダーを保証（gspreadの警告を回避済み）"""
     head = ws.row_values(1)
     target = ["ソース", "タイトル", "URL", "投稿日", "掲載元"]
     if head[:len(target)] != target:
-        ws.update('A1', [target])
+        # 修正: 名前付き引数を使用し、DeprecationWarningを回避
+        ws.update(range_name='A1', values=[target])
 
 def ensure_body_comment_headers(ws: gspread.Worksheet, max_comments: int) -> None:
-    """F列以降の本文・コメントヘッダーを保証"""
+    """F列以降の本文・コメントヘッダーを保証（gspreadの警告を回避済み）"""
     current = ws.row_values(1)
     base = ["ソース", "タイトル", "URL", "投稿日", "掲載元"]
     body_headers = [f"本文({i}ページ)" for i in range(1, 11)]
@@ -269,10 +268,11 @@ def ensure_body_comment_headers(ws: gspread.Worksheet, max_comments: int) -> Non
     comment_headers = [f"コメント{i}" for i in range(1, max(1, max_comments) + 1)]
     target = base + body_headers + comments_count + comment_headers
     if current != target:
-        ws.update('A1', [target])
+        # 修正: 名前付き引数を使用し、DeprecationWarningを回避
+        ws.update(range_name='A1', values=[target])
 
 
-# --- データ転送 (main2.py) ---
+# --- データ転送 ---
 def transfer_a_to_e(gc: gspread.Client, dest_ws: gspread.Worksheet) -> int:
     """
     SOURCEシートから「前日15:00〜当日14:59:59」のデータをDESTシートのA〜E列に転送
@@ -314,7 +314,7 @@ def transfer_a_to_e(gc: gspread.Client, dest_ws: gspread.Worksheet) -> int:
     return len(to_append)
 
 
-# --- 本文・コメント取得 (main2.py) ---
+# --- 本文・コメント取得 ---
 def fetch_article_pages(base_url: str) -> Tuple[str, str, List[str]]:
     """記事本文を取得します"""
     title = "取得不可"
@@ -364,13 +364,12 @@ def fetch_comments_with_selenium(base_url: str) -> List[str]:
     options.add_argument("--window-size=1280,2000")
     
     try:
-        driver = webdriver.Chrome(options=options)
-    except Exception:
-        try:
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        except Exception as e:
-            print(f"❌ WebDriver初期化エラー: {e}")
-            return []
+        driver_path = ChromeDriverManager().install()
+        service = Service(driver_path)
+        driver = webdriver.Chrome(service=service, options=options)
+    except Exception as e:
+        print(f"❌ WebDriver初期化エラー: {e}")
+        return []
 
     comments: List[str] = []
     last_tail: Optional[str] = None
@@ -455,7 +454,8 @@ def write_bodies_and_comments(ws: gspread.Worksheet) -> None:
 
     # F2 から一括更新
     if rows_data:
-        ws.update("F2", rows_data)
+        # 修正: 名前付き引数を使用し、DeprecationWarningを回避
+        ws.update(range_name="F2", values=rows_data)
         print(f"✅ F列以降に本文・コメントを書き込み完了: {len(rows_data)} 行")
 
 
@@ -488,7 +488,6 @@ def main():
     print(f"📝 DESTシートに新規追加: {added} 行")
     
     # 5. DESTシートの記事に対して本文・コメントを取得 (F列以降)
-    # 当日タブの全行に対して実行し、前回の未完了分もカバーします。
     if ws.get_all_values(value_render_option='UNFORMATTED_VALUE'):
         write_bodies_and_comments(ws)
     else:
