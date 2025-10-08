@@ -9,7 +9,7 @@
 """
 
 import os
-import json
+import json # ◀️ 追加
 import time
 import re
 import random
@@ -265,7 +265,10 @@ def ensure_body_comment_headers(ws: gspread.Worksheet, max_comments: int) -> Non
     base = ["ソース", "タイトル", "URL", "投稿日", "掲載元"]
     body_headers = [f"本文({i}ページ)" for i in range(1, 11)]
     comments_count = ["コメント数"]
-    comment_headers = [f"コメント{i}" for i in range(1, max(1, max_comments) + 1)]
+    
+    # ヘッダーを「コメント 1-10」「コメント 11-20」のように変更
+    comment_headers = [f"コメント {i*10 + 1}-{ (i+1) * 10}" for i in range(max_comments)]
+    
     target = base + body_headers + comments_count + comment_headers
     if current != target:
         # 修正: 名前付き引数を使用し、DeprecationWarningを回避
@@ -425,7 +428,7 @@ def write_bodies_and_comments(ws: gspread.Worksheet) -> None:
     if total == 0: return
 
     rows_data: List[List[str]] = []
-    max_comments = 0
+    max_comments = 0 # 「コメントセル」の最大列数を記録
     # スプレッドシートの行番号(2から開始)
     for row_idx, url in enumerate(urls, start=2):
         print(f"  - ({row_idx-1}/{total}) {url}")
@@ -435,16 +438,37 @@ def write_bodies_and_comments(ws: gspread.Worksheet) -> None:
 
             body_cells = bodies[:MAX_BODY_PAGES] + [""] * (MAX_BODY_PAGES - len(bodies))
             cnt = len(comments)
-            row = body_cells + [cnt] + comments
+
+            # === 変更箇所 START ===
+            # コメントを10件ずつのJSON形式の文字列にグループ化する
+            grouped_comments_json = []
+            for i in range(0, len(comments), 10):
+                chunk = comments[i:i+10]
+                json_chunk = []
+                for j, comment_text in enumerate(chunk):
+                    # 全体でのコメント番号を計算
+                    comment_id = i + j + 1
+                    json_chunk.append({"id": comment_id, "comment": comment_text})
+                
+                # JSON文字列に変換（日本語が文字化けしないようにensure_ascii=Falseを指定）
+                grouped_comments_json.append(json.dumps(json_chunk, ensure_ascii=False))
+
+            row = body_cells + [cnt] + grouped_comments_json
+            
             rows_data.append(row)
-            if cnt > max_comments:
-                max_comments = cnt
+            
+            # 最大のコメント「セル」数を更新
+            if len(grouped_comments_json) > max_comments:
+                max_comments = len(grouped_comments_json)
+            # === 変更箇所 END ===
+
         except Exception as e:
             print(f"    ! Error: {e}")
             rows_data.append(([""] * MAX_BODY_PAGES) + [0])
 
-    # データ行の長さを最大コメント数に合わせて調整
+    # データ行の長さを最大のコメント「セル」数に合わせて調整
     need_cols = MAX_BODY_PAGES + 1 + max_comments
+    
     for i in range(len(rows_data)):
         if len(rows_data[i]) < need_cols:
             rows_data[i].extend([""] * (need_cols - len(rows_data[i])))
